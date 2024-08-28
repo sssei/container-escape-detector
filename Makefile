@@ -1,4 +1,4 @@
-obj-m += detect.o
+obj-m += container-escape-detector.o
 
 PWD := $(CURDIR)
 
