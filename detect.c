@@ -1,72 +1,66 @@
-#include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/tracepoint.h>
+#include <linux/module.h>
 #include <linux/sched.h>
-#include <linux/utsname.h>
-#include <linux/fs.h>
-#include <linux/fdtable.h>
-#include <linux/string.h>
+#include <linux/tracepoint.h>
+#include <linux/syscalls.h>
+#include <linux/version.h>
 
-#define TARGET_PROCESS_NAME "syz-executor"  // 監視したいプロセス名を指定
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Your Name");
+MODULE_DESCRIPTION("Kernel module to hook all syscalls using tracepoints");
 
-// トレースポイントのプローブ関数
-void sys_enter_probe(void *ignore, struct pt_regs *regs, long id)
+// 関数プロトタイプを追加
+static void sys_enter_callback(void *data, long id, struct pt_regs *regs);
+static void tp_callback(struct tracepoint *tp, void *priv);
+
+static struct tracepoint *tp_sys_enter = NULL;
+
+static void sys_enter_callback(void *data, long id, struct pt_regs *regs)
 {
-    struct files_struct *files;
-    struct fdtable *fdt;
-    int i;
+    struct task_struct *task = current;
+    printk(KERN_INFO "Process: %s (PID: %d), Syscall ID: %ld\n", task->comm, task->pid, id);
+}
 
-    // 対象プロセス名のチェック
-    if (strcmp(current->comm, TARGET_PROCESS_NAME) == 0) {
-        printk(KERN_INFO "Target Process: %s, Syscall ID: %ld\n", current->comm, id);
-
-        // プロセスのファイルディスクリプタを取得
-        files = current->files;
-        fdt = files_fdtable(files);
-
-        // ファイルディスクリプタとその名前を表示
-        for (i = 0; i < fdt->max_fds; i++) {
-            struct file *file = fdt->fd[i];
-            if (file) {
-                struct path *path = &file->f_path;
-                char *buf = (char *)__get_free_page(GFP_KERNEL);
-
-                if (buf) {
-                    char *tmp = d_path(path, buf, PAGE_SIZE);
-                    printk(KERN_INFO "FD %d: %s\n", i, tmp);
-                    free_page((unsigned long)buf);
-                }
-            }
-        }
+static void tp_callback(struct tracepoint *tp, void *priv)
+{
+    if (strcmp(tp->name, "sys_exit") == 0)
+    {
+        tp_sys_enter = tp;
+        tracepoint_probe_register(tp_sys_enter, sys_enter_callback, NULL);
+        printk(KERN_INFO "Tracepoint for sys_enter registered.\n");
     }
 }
 
-// トレースポイントを登録する関数
-static int __init syscall_monitor_init(void)
+static void lookup_tracepoints(void)
 {
-    int ret;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0)
+    for_each_kernel_tracepoint(tp_callback, NULL);
 
-    // sys_enter のトレースポイントを登録
-    ret = register_trace_sys_enter(sys_enter_probe, NULL);
-    if (ret) {
-        printk(KERN_ERR "Failed to register tracepoint\n");
-        return ret;
+    if (!tp_sys_enter)
+    {
+        printk(KERN_ERR "Tracepoint for sys_enter not found.\n");
     }
+#else
+    printk(KERN_ERR "Kernel version not supported.\n");
+#endif
+}
 
-    printk(KERN_INFO "Syscall monitor module loaded\n");
+static int __init syscall_hook_init(void)
+{
+    printk(KERN_INFO "Syscall hook module loaded.\n");
+    lookup_tracepoints();
     return 0;
 }
 
-// トレースポイントを解除する関数
-static void __exit syscall_monitor_exit(void)
+static void __exit syscall_hook_exit(void)
 {
-    unregister_trace_sys_enter(sys_enter_probe, NULL);
-    printk(KERN_INFO "Syscall monitor module unloaded\n");
+    if (tp_sys_enter)
+    {
+        tracepoint_probe_unregister(tp_sys_enter, sys_enter_callback, NULL);
+        printk(KERN_INFO "Tracepoint for sys_enter unregistered.\n");
+    }
+    printk(KERN_INFO "Syscall hook module unloaded.\n");
 }
 
-module_init(syscall_monitor_init);
-module_exit(syscall_monitor_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Seiga Ueno");
-MODULE_DESCRIPTION("A module to monitor specific process syscalls and print FD, process name, and syscall ID");
+module_init(syscall_hook_init);
+module_exit(syscall_hook_exit);
