@@ -9,27 +9,75 @@
 #include <linux/fdtable.h>
 #include <linux/delay.h>
 #include <linux/fs_struct.h>
+#include <linux/nsproxy.h>
+#include <linux/ns_common.h>
+#include <linux/mnt_namespace.h>
+#include "/home/seiga/workspace/qemu/noble/fs/mount.h"
 
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Your Name");
 MODULE_DESCRIPTION("Kernel module to hook syscalls when they exit using tracepoints");
 
+
 static void sys_exit_callback(void *data, struct pt_regs *regs, long ret);
 static void tp_callback(struct tracepoint *tp, void *priv);
 
 static struct tracepoint *tp_sys_exit = NULL;
-struct vfsmount *container_root = NULL;
 
-static void find_process_ns_init(void)
+
+struct vfsmount_list_entry {
+    struct list_head list;
+    struct vfsmount *mnt;
+};
+
+struct vfsmount_list{
+    int mount_count;
+    struct list_head head;
+};
+
+bool is_dev_file(struct file *file)
+{
+    struct inode *inode = file->f_path.dentry->d_inode;
+    return S_ISBLK(inode->i_mode) || S_ISCHR(inode->i_mode);
+}
+
+static struct vfsmount_list* get_container_vfsmount(void)
 {
     struct task_struct *task;
+    struct mnt_namespace *mnt_ns = NULL;
+    struct vfsmount_list *vfsmount_list = kmalloc(sizeof(struct vfsmount_list), GFP_KERNEL);
+    if (!vfsmount_list) {
+        printk(KERN_ERR "Failed to allocate memory\n");
+        return NULL;
+    }
+    INIT_LIST_HEAD(&vfsmount_list->head);
+    vfsmount_list->mount_count = 0;
+
+    
     while(1){
         for_each_process(task) {
             if (strcmp(task->comm, "entrypoint.sh") == 0) {
-                container_root = task->fs->root.mnt;
-                printk(KERN_INFO "Container root vfsmount: 0x%p\n", container_root);
-                return;
+                mnt_ns = task->nsproxy->mnt_ns;
+                //down_read(&mnt_ns->ns_rwsem);
+                printk(KERN_INFO "mnt_ns : %p\n", mnt_ns);
+                struct rb_node *node;
+                struct mount *mnt;
+                struct vfsmount *vfsmount;
+                for(node = rb_first(&mnt_ns->mounts); node; node = rb_next(node)){
+                    mnt = rb_entry(node, struct mount, mnt_node);
+                    vfsmount = &mnt->mnt;
+                    printk(KERN_INFO "vfsmount : %p\n", vfsmount);
+                    struct vfsmount_list_entry *entry = kmalloc(sizeof(struct vfsmount_list_entry), GFP_KERNEL);
+                    if (!entry) {
+                        printk(KERN_ERR "Failed to allocate memory\n");
+                        return NULL;
+                    }
+                    entry->mnt = vfsmount;
+                    list_add(&entry->list, &vfsmount_list->head);
+                    vfsmount_list->mount_count++;
+                }
+                return vfsmount_list;                
             } 
         }
         printk(KERN_INFO "Process not found. Sleeping for 1 second.\n");
@@ -70,13 +118,17 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 char *tmp=d_path(&path,pathname,256);
                 fd_root = path.mnt;
 
-                printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-                kfree(pathname);
-                
-                if(fd_root != container_root){
-                    printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-                    BUG();  
-                    return;
+                if(is_dev_file(filp)){
+                    printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d) is a device file : %s\n", task->pid, task->comm, syscall_id, i, tmp);
+                    kfree(pathname);
+                }else{
+                    printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
+                    kfree(pathname);
+//                    if(fd_root != container_root){
+//                        printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
+//                        BUG();  
+//                        return;
+//                    }
                 }
             }
         }
@@ -106,7 +158,7 @@ static void lookup_tracepoints(void)
 static int __init syscall_hook_init(void)
 {
     printk(KERN_INFO "Syscall hook module loaded.\n");
-    find_process_ns_init();
+    struct vfsmount_list *container_vfsmount = get_container_vfsmount();
     lookup_tracepoints();
     return 0;
 }
