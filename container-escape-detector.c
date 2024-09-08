@@ -16,8 +16,8 @@
 
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Your Name");
-MODULE_DESCRIPTION("Kernel module to hook syscalls when they exit using tracepoints");
+MODULE_AUTHOR("Seiga Ueno");
+MODULE_DESCRIPTION("Kernel module to detect mount namespace escape");
 
 
 static void sys_exit_callback(void *data, struct pt_regs *regs, long ret);
@@ -36,30 +36,20 @@ struct vfsmount_list{
     struct list_head head;
 };
 
-bool is_dev_file(struct file *file)
-{
-    struct inode *inode = file->f_path.dentry->d_inode;
-    return S_ISBLK(inode->i_mode) || S_ISCHR(inode->i_mode);
-}
+struct vfsmount_list *container_vfsmount = NULL;
 
-static struct vfsmount_list* get_container_vfsmount(void)
+static void set_container_vfsmount(void)
 {
     struct task_struct *task;
     struct mnt_namespace *mnt_ns = NULL;
-    struct vfsmount_list *vfsmount_list = kmalloc(sizeof(struct vfsmount_list), GFP_KERNEL);
-    if (!vfsmount_list) {
-        printk(KERN_ERR "Failed to allocate memory\n");
-        return NULL;
-    }
-    INIT_LIST_HEAD(&vfsmount_list->head);
-    vfsmount_list->mount_count = 0;
 
+    INIT_LIST_HEAD(&container_vfsmount->head);
+    container_vfsmount->mount_count = 0;
     
     while(1){
         for_each_process(task) {
             if (strcmp(task->comm, "entrypoint.sh") == 0) {
                 mnt_ns = task->nsproxy->mnt_ns;
-                //down_read(&mnt_ns->ns_rwsem);
                 printk(KERN_INFO "mnt_ns : %p\n", mnt_ns);
                 struct rb_node *node;
                 struct mount *mnt;
@@ -67,17 +57,16 @@ static struct vfsmount_list* get_container_vfsmount(void)
                 for(node = rb_first(&mnt_ns->mounts); node; node = rb_next(node)){
                     mnt = rb_entry(node, struct mount, mnt_node);
                     vfsmount = &mnt->mnt;
-                    printk(KERN_INFO "vfsmount : %p\n", vfsmount);
                     struct vfsmount_list_entry *entry = kmalloc(sizeof(struct vfsmount_list_entry), GFP_KERNEL);
                     if (!entry) {
                         printk(KERN_ERR "Failed to allocate memory\n");
-                        return NULL;
+                        return;
                     }
                     entry->mnt = vfsmount;
-                    list_add(&entry->list, &vfsmount_list->head);
-                    vfsmount_list->mount_count++;
+                    list_add(&entry->list, &container_vfsmount->head);
+                    container_vfsmount->mount_count++;
                 }
-                return vfsmount_list;                
+                return;              
             } 
         }
         printk(KERN_INFO "Process not found. Sleeping for 1 second.\n");
@@ -105,7 +94,7 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
         files = rcu_dereference(task->files);;
         fdt = files_fdtable(files);
 
-        for(i=2;i<fdt->max_fds;i++){
+        for(i = 0; i < fdt->max_fds; i++){
             filp = rcu_dereference(fdt->fd[i]);
             if(filp){
                 path = filp->f_path;
@@ -118,19 +107,25 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 char *tmp=d_path(&path,pathname,256);
                 fd_root = path.mnt;
 
-                if(is_dev_file(filp)){
-                    printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d) is a device file : %s\n", task->pid, task->comm, syscall_id, i, tmp);
-                    kfree(pathname);
-                }else{
-                    printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
-                    kfree(pathname);
-//                    if(fd_root != container_root){
-//                        printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-//                        BUG();  
-//                        return;
-//                    }
+                printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
+                kfree(pathname);
+
+                // check if the file is in the container vfsmount
+                struct vfsmount_list_entry *entry;
+                int found = 0;
+                list_for_each_entry(entry, &container_vfsmount->head, list) {
+                    if (entry->mnt == fd_root) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
+                    BUG();
+                    return;
                 }
             }
+
         }
         rcu_read_unlock();
     }
@@ -158,7 +153,31 @@ static void lookup_tracepoints(void)
 static int __init syscall_hook_init(void)
 {
     printk(KERN_INFO "Syscall hook module loaded.\n");
-    struct vfsmount_list *container_vfsmount = get_container_vfsmount();
+    container_vfsmount = kmalloc(sizeof(struct vfsmount_list), GFP_KERNEL);
+    if (!container_vfsmount) {
+        printk(KERN_ERR "Failed to allocate memory\n");
+        return 1;
+    }    
+    set_container_vfsmount();
+
+    // print container vfsmount 
+    struct vfsmount_list_entry *entry;
+    list_for_each_entry(entry, &container_vfsmount->head, list) {
+        printk(KERN_INFO "vfsmount : %p\n", entry->mnt);
+        char *pathname = kmalloc(256,GFP_ATOMIC);
+        if (!pathname) {
+            printk(KERN_ERR "Failed to allocate memory\n");
+            return 1;
+        }
+        struct path path;
+        path.mnt = entry->mnt;
+        path.dentry = entry->mnt->mnt_root;
+        path_get(&path);
+        char *tmp=d_path(&path,pathname,256);
+        printk(KERN_INFO "vfsmount path : %s\n", tmp);        
+        kfree(pathname);
+    }
+
     lookup_tracepoints();
     return 0;
 }
