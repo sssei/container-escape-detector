@@ -121,7 +121,7 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 }
                 if (!found) {
                     printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-                    BUG();
+                    //BUG();
                     return;
                 }
             }
