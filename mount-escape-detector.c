@@ -82,8 +82,9 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
 
     if (strcmp(task->comm, "syz-executor") == 0)
     {
-        struct files_struct *files=task->files;
-        struct fdtable *fdt=files_fdtable(files);
+
+        struct files_struct* files;
+        struct fdtable *fdt;
         struct file *filp;
         struct path path;
         struct vfsmount *fd_root;
@@ -97,6 +98,12 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
         for(i = 0; i < fdt->max_fds; i++){
             filp = rcu_dereference(fdt->fd[i]);
             if(filp){
+
+                // check if the file is regular file or directory
+                if (!(S_ISREG(filp->f_inode->i_mode) || S_ISDIR(filp->f_inode->i_mode) || S_ISLNK(filp->f_inode->i_mode))) {
+                    continue;
+                }
+
                 path = filp->f_path;
                 pathname = kmalloc(256,GFP_ATOMIC);
                 if (!pathname) {
@@ -107,7 +114,7 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 char *tmp=d_path(&path,pathname,256);
                 fd_root = path.mnt;
 
-                printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
+                // printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
                 kfree(pathname);
 
                 // check if the file is in the container vfsmount
@@ -121,7 +128,8 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 }
                 if (!found) {
                     printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-                    //BUG();
+                    rcu_read_unlock();
+                    BUG();
                     return;
                 }
             }
