@@ -30,6 +30,7 @@ static struct tracepoint *tp_sys_exit = NULL;
 struct vfsmount_list_entry {
     struct list_head list;
     struct vfsmount *mnt;
+    char path[256];
 };
 
 struct vfsmount_list{
@@ -39,7 +40,7 @@ struct vfsmount_list{
 
 struct vfsmount_list *container_vfsmount = NULL;
 
-static void set_container_vfsmount(void)
+static void set_host_vfsmount(void)
 {
     struct task_struct *task;
     struct mnt_namespace *mnt_ns = NULL;
@@ -49,7 +50,7 @@ static void set_container_vfsmount(void)
     
     while(1){
         for_each_process(task) {
-            if (strcmp(task->comm, "entrypoint.sh") == 0) {
+            if (strcmp(task->comm, "syz-manager") == 0) {
                 mnt_ns = task->nsproxy->mnt_ns;
                 printk(KERN_INFO "mnt_ns : %p\n", mnt_ns);
                 struct rb_node *node;
@@ -118,23 +119,17 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
                 // printk(KERN_INFO "Process %d (%s) is executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);                    
                 kfree(pathname);
 
-                // check if the file is in the container vfsmount
+                // check if the file is in host vfsmount
                 struct vfsmount_list_entry *entry;
-                int found = 0;
                 list_for_each_entry(entry, &container_vfsmount->head, list) {
                     if (entry->mnt == fd_root) {
-                        found = 1;
-                        break;
+                        printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p (%s) \n", task->pid, task->comm, syscall_id, i,tmp, fd_root, entry->path);
+                        rcu_read_unlock();
+                        BUG();
+                        return;
                     }
                 }
-                if (!found) {
-                    printk(KERN_ERR "Container Escape Detected : Process %d (%s) executing syscall %ld. fd(%d), File path: %s, vfsmount: 0x%p\n", task->pid, task->comm, syscall_id, i,tmp, fd_root);
-                    rcu_read_unlock();
-                    BUG();
-                    return;
-                }
             }
-
         }
         rcu_read_unlock();
     }
@@ -167,23 +162,19 @@ static int __init syscall_hook_init(void)
         printk(KERN_ERR "Failed to allocate memory\n");
         return 1;
     }    
-    set_container_vfsmount();
+    set_host_vfsmount();
 
     // print container vfsmount 
     struct vfsmount_list_entry *entry;
     list_for_each_entry(entry, &container_vfsmount->head, list) {
         printk(KERN_INFO "vfsmount : %p\n", entry->mnt);
         char *pathname = kmalloc(256,GFP_ATOMIC);
-        if (!pathname) {
-            printk(KERN_ERR "Failed to allocate memory\n");
-            return 1;
-        }
         struct path path;
         path.mnt = entry->mnt;
         path.dentry = entry->mnt->mnt_root;
         path_get(&path);
-        char *tmp=d_path(&path,pathname,256);
-        printk(KERN_INFO "vfsmount path : %s\n", tmp);        
+        d_path(&path, entry->path, 256);        
+        printk(KERN_INFO "vfsmount path : %s\n", entry->path);        
         kfree(pathname);
     }
 
