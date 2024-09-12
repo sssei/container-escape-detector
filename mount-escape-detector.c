@@ -50,7 +50,7 @@ static void set_host_vfsmount(void)
     
     while(1){
         for_each_process(task) {
-            if (strcmp(task->comm, "syz-manager") == 0) {
+            if (strcmp(task->comm, "systemd") == 0) {
                 mnt_ns = task->nsproxy->mnt_ns;
                 printk(KERN_INFO "mnt_ns : %p\n", mnt_ns);
                 struct rb_node *node;
@@ -169,12 +169,17 @@ static int __init syscall_hook_init(void)
     list_for_each_entry(entry, &container_vfsmount->head, list) {
         printk(KERN_INFO "vfsmount : %p\n", entry->mnt);
         char *pathname = kmalloc(256,GFP_ATOMIC);
+        if (!pathname) {
+            printk(KERN_ERR "Failed to allocate memory\n");
+            return 1;
+        }
         struct path path;
         path.mnt = entry->mnt;
         path.dentry = entry->mnt->mnt_root;
         path_get(&path);
-        d_path(&path, entry->path, 256);        
-        printk(KERN_INFO "vfsmount path : %s\n", entry->path);        
+        char *tmp = d_path(&path, pathname, 256); 
+        strcpy(entry->path, tmp);
+        printk(KERN_INFO "vfsmount path : %s\n", entry->path); 
         kfree(pathname);
     }
 
