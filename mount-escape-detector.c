@@ -12,6 +12,7 @@
 #include <linux/nsproxy.h>
 #include <linux/ns_common.h>
 #include <linux/mnt_namespace.h>
+#include <net/sock.h>
 #include "/home/seiga/workspace/qemu/noble/fs/mount.h"
 
 
@@ -100,7 +101,7 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
             if(filp){
 
                 // check if the file is regular file or directory
-                if (!(S_ISREG(filp->f_inode->i_mode) || S_ISDIR(filp->f_inode->i_mode) || S_ISLNK(filp->f_inode->i_mode))) {
+                if (S_ISCHR(filp->f_inode->i_mode) || S_ISBLK(filp->f_inode->i_mode) || S_ISFIFO(filp->f_inode->i_mode) || S_ISSOCK(filp->f_inode->i_mode)) {
                     continue;
                 }
 
