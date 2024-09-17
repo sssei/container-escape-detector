@@ -21,20 +21,20 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret);
 static void tp_callback(struct tracepoint *tp, void *priv);
 
 static struct tracepoint *tp_sys_exit = NULL;
-static struct nsproxy container_ns;
+static struct nsproxy host_ns;
 
-static void container_nsproxy(void)
+static void host_nsproxy(void)
 {
     struct task_struct *task;
     
     while(1){
         for_each_process(task) {
-            if (strcmp(task->comm, "entrypoint.sh") == 0) {
-                container_ns.uts_ns = task->nsproxy->uts_ns;
-                container_ns.pid_ns_for_children = task->nsproxy->pid_ns_for_children;
-                container_ns.net_ns = task->nsproxy->net_ns;
-                container_ns.mnt_ns = task->nsproxy->mnt_ns;
-                container_ns.ipc_ns = task->nsproxy->ipc_ns;                
+            if (strcmp(task->comm, "systemd") == 0) {
+                host_ns.uts_ns = task->nsproxy->uts_ns;
+                host_ns.pid_ns_for_children = task->nsproxy->pid_ns_for_children;
+                host_ns.net_ns = task->nsproxy->net_ns;
+                host_ns.mnt_ns = task->nsproxy->mnt_ns;
+                host_ns.ipc_ns = task->nsproxy->ipc_ns;                
                 return;
             }
         }
@@ -51,40 +51,30 @@ static void sys_exit_callback(void *data, struct pt_regs *regs, long ret)
 
     if (strcmp(task->comm, "syz-executor") == 0)
     {
-        if(container_ns.uts_ns != task->nsproxy->uts_ns){
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. UTS namespace (0x%p) is different from the container's UTS namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->uts_ns, container_ns.uts_ns);
-//            BUG();
-        }else{
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. UTS namespace (0x%p) is the same as the container's UTS namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->uts_ns, container_ns.uts_ns);
+        if(host_ns.uts_ns == task->nsproxy->uts_ns){
+            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. UTS namespace (0x%p) is the same as host's (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->uts_ns, host_ns.uts_ns);
+            BUG();
         }
 
-        if(container_ns.pid_ns_for_children != task->nsproxy->pid_ns_for_children){
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. PID namespace (0x%p) is different from the container's PID namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->pid_ns_for_children, container_ns.pid_ns_for_children);
-//            BUG();
-        }else{
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. PID namespace (0x%p) is the same as the container's PID namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->pid_ns_for_children, container_ns.pid_ns_for_children);
+        if(host_ns.pid_ns_for_children == task->nsproxy->pid_ns_for_children){
+            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. PID namespace (0x%p) is the same as host's (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->pid_ns_for_children, host_ns.pid_ns_for_children);
+            BUG();
         }
 
-        if(container_ns.net_ns != task->nsproxy->net_ns){
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Network namespace (0x%p) is different from the container's network namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->net_ns, container_ns.net_ns);
-//            BUG();            
-        }else{
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Network namespace (0x%p) is the same as the container's network namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->net_ns, container_ns.net_ns);
+        if(host_ns.net_ns == task->nsproxy->net_ns){
+            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Network namespace (0x%p) is the same as host's (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->net_ns, host_ns.net_ns);
+            BUG();            
         }
 
-        if(container_ns.mnt_ns != task->nsproxy->mnt_ns){
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Mount namespace (0x%p) is different from the container's mount namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->mnt_ns, container_ns.mnt_ns);
-//            BUG();            
-        }else{
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Mount namespace (0x%p) is the same as the container's mount namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->mnt_ns, container_ns.mnt_ns);
+        if(host_ns.mnt_ns == task->nsproxy->mnt_ns){
+            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. Mount namespace (0x%p) is the same as host's (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->mnt_ns, host_ns.mnt_ns);
+            BUG();            
         }
 
-        if(container_ns.ipc_ns != task->nsproxy->ipc_ns){
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. IPC namespace (0x%p) is different from the container's IPC namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->ipc_ns, container_ns.ipc_ns);
-//            BUG();            
-        }else{
-            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. IPC namespace (0x%p) is the same as the container's IPC namespace (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->ipc_ns, container_ns.ipc_ns);
-        }
+        if(host_ns.ipc_ns == task->nsproxy->ipc_ns){
+            printk(KERN_INFO "Process %d (%s) is executing syscall %ld. IPC namespace (0x%p) is the same as host's (0x%p).\n", task->pid, task->comm, syscall_id, task->nsproxy->ipc_ns, host_ns.ipc_ns);
+            BUG();            
+        }            
     }
     return;
 }
@@ -111,7 +101,7 @@ static void lookup_tracepoints(void)
 static int __init syscall_hook_init(void)
 {
     printk(KERN_INFO "Syscall hook module loaded.\n");
-    container_nsproxy();
+    host_nsproxy();
     lookup_tracepoints();
     return 0;
 }
