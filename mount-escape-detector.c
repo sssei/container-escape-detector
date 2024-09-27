@@ -13,7 +13,7 @@
 #include <linux/ns_common.h>
 #include <linux/mnt_namespace.h>
 #include <net/sock.h>
-#include "/home/seiga/workspace/qemu/noble/fs/mount.h"
+#include "/home/seiga/workspace/qemu/linux-5.6-rc1/fs/mount.h"
 
 
 MODULE_LICENSE("GPL");
@@ -44,22 +44,22 @@ static void set_host_vfsmount(void)
 {
     struct task_struct *task;
     struct mnt_namespace *mnt_ns = NULL;
+    struct mount *mnt;
+    struct vfsmount *vfsmount;
+    struct vfsmount_list_entry *entry;
 
     INIT_LIST_HEAD(&container_vfsmount->head);
     container_vfsmount->mount_count = 0;
-    
-    while(1){
+
+    while (1) {
         for_each_process(task) {
             if (strcmp(task->comm, "systemd") == 0) {
                 mnt_ns = task->nsproxy->mnt_ns;
                 printk(KERN_INFO "mnt_ns : %p\n", mnt_ns);
-                struct rb_node *node;
-                struct mount *mnt;
-                struct vfsmount *vfsmount;
-                for(node = rb_first(&mnt_ns->mounts); node; node = rb_next(node)){
-                    mnt = rb_entry(node, struct mount, mnt_node);
+
+                list_for_each_entry(mnt, &mnt_ns->list, mnt_list) {
                     vfsmount = &mnt->mnt;
-                    struct vfsmount_list_entry *entry = kmalloc(sizeof(struct vfsmount_list_entry), GFP_KERNEL);
+                    entry = kmalloc(sizeof(struct vfsmount_list_entry), GFP_KERNEL);
                     if (!entry) {
                         printk(KERN_ERR "Failed to allocate memory\n");
                         return;
@@ -68,8 +68,8 @@ static void set_host_vfsmount(void)
                     list_add(&entry->list, &container_vfsmount->head);
                     container_vfsmount->mount_count++;
                 }
-                return;              
-            } 
+                return;
+            }
         }
         printk(KERN_INFO "Process not found. Sleeping for 1 second.\n");
         msleep(1000);
